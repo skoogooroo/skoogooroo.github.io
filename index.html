@@ -1,0 +1,101 @@
+<!DOCTYPE html>
+<!--
+  RAIDER LOANERS — camera wrapper page (host this OUTSIDE Apps Script, e.g. GitHub Pages)
+
+  Why: in ChromeOS Managed Guest Sessions, pages inside Apps Script's iframes can't use the camera.
+  This page is a normal top-level page, so it CAN. It shows the kiosk full-screen and, when a student
+  checks out, takes the photo and hands it to the kiosk. Nothing is stored here — the photo goes
+  straight to the kiosk, which saves it to your Drive exactly as before.
+
+  SETUP
+   1. Paste your kiosk's /exec link between the quotes on the KIOSK_URL line below.
+   2. Host this file (e.g. GitHub Pages → https://yourname.github.io/raider-kiosk/).
+   3. Settings tab in the sheet: CAMERA_WRAPPER_ORIGIN = https://yourname.github.io  (just the start)
+   4. Admin console (Managed Guest Session): add https://yourname.github.io to "Video input allowed URLs",
+      and make THIS page's address the session's start/homepage URL instead of the /exec link.
+-->
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
+<title>Raider Loaners</title>
+<style>
+  html,body{margin:0;height:100%;background:#1a0d12;overflow:hidden}
+  #app{border:0;width:100%;height:100%;display:block}
+  #cam{position:fixed;left:14px;bottom:34px;width:170px;border:3px solid #f3c11b;border-radius:12px;overflow:hidden;
+    background:#000;display:none;z-index:5;box-shadow:0 6px 16px rgba(0,0,0,.5)}
+  #cam video{display:block;width:100%;transform:scaleX(-1)}
+  #cam span{position:absolute;top:5px;left:6px;font:13px Arial,sans-serif;letter-spacing:1px;color:#fff;
+    background:rgba(122,29,58,.85);padding:1px 7px;border-radius:6px}
+  #err{position:fixed;right:14px;bottom:14px;max-width:440px;font:15px/1.3 Arial,sans-serif;color:#fff;
+    background:rgba(120,20,20,.92);border:2px solid #f3c11b;border-radius:10px;padding:8px 12px;z-index:6;display:none}
+</style>
+</head>
+<body>
+<iframe id="app" allow="camera; microphone; clipboard-write"></iframe>
+<div id="cam"><video id="v" autoplay muted playsinline></video><span>● CAMERA</span></div>
+<div id="err"></div>
+<script>
+  // ⬇⬇ PASTE YOUR KIOSK LINK (the one ending in /exec) BETWEEN THE QUOTES ⬇⬇
+  const KIOSK_URL = 'https://script.google.com/macros/s/AKfycbzoVlegyw9ZNhocXVPWqu3xvfn7fx8M8cBteGVkqbvnwwsEkbAnyNesdFTevo_BCXzf/exec';
+
+  // Only the kiosk's own Apps Script frames may ask for photos.
+  const KIOSK_FRAME = /^https:\/\/[a-z0-9-]+-script\.googleusercontent\.com$/;
+
+  const v = document.getElementById('v');
+  let ready = false, error = '', preview = true, kiosk = null;
+
+  document.getElementById('app').src = new URLSearchParams(location.search).get('kiosk') || KIOSK_URL;
+
+  function show() {
+    document.getElementById('cam').style.display = ready && preview && kiosk ? 'block' : 'none';
+    const e = document.getElementById('err');
+    e.textContent = error ? '📷 ' + error : '';
+    e.style.display = error ? 'block' : 'none';
+  }
+  function tellKiosk() {
+    if (kiosk) kiosk.win.postMessage({ type: 'raider-camera', ok: ready, error }, kiosk.origin);
+  }
+
+  async function start() {
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ video: { width: { ideal: 640 }, height: { ideal: 480 } }, audio: false });
+      v.srcObject = stream;
+      ready = true; error = '';
+      stream.getVideoTracks()[0].addEventListener('ended', () => {
+        ready = false; error = 'Camera unplugged'; show(); tellKiosk(); setTimeout(start, 5000);
+      });
+    } catch (e) {
+      ready = false;
+      error = (e && e.name === 'NotFoundError') ? 'No camera found — is the webcam plugged in?'
+            : (e && e.name === 'NotAllowedError') ? 'Camera blocked — add this page to "Video input allowed URLs".'
+            : 'Camera error: ' + (e && (e.name + ' ' + (e.message || '')));
+      setTimeout(start, 60000);
+    }
+    show(); tellKiosk();
+  }
+
+  function snap() {
+    if (!ready || !v.videoWidth) return '';
+    const w = 480, h = Math.round(w * v.videoHeight / v.videoWidth);
+    const c = document.createElement('canvas'); c.width = w; c.height = h;
+    c.getContext('2d').drawImage(v, 0, 0, w, h);
+    return c.toDataURL('image/jpeg', 0.7);
+  }
+
+  window.addEventListener('message', e => {
+    if (!KIOSK_FRAME.test(e.origin) || !e.data || typeof e.data !== 'object') return;
+    if (e.data.type === 'raider-hello') {
+      kiosk = { win: e.source, origin: e.origin };
+      preview = e.data.preview !== false;
+      show(); tellKiosk();
+    } else if (e.data.type === 'raider-snap') {
+      e.source.postMessage({ type: 'raider-photo', id: e.data.id, photo: snap() }, e.origin);
+    }
+  });
+
+  if (navigator.mediaDevices && navigator.mediaDevices.getUserMedia) start();
+  else { error = 'This browser has no camera support.'; show(); }
+</script>
+</body>
+</html>
