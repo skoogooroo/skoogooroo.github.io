@@ -22,8 +22,11 @@
 <style>
   html,body{margin:0;height:100%;background:#1a0d12;overflow:hidden}
   #app{border:0;width:100%;height:100%;display:block}
+  /* The video must stay rendered (never display:none) or Chrome stops drawing frames and photos come out black.
+     When the preview is off it is just made invisible. */
   #cam{position:fixed;left:14px;bottom:34px;width:170px;border:3px solid #f3c11b;border-radius:12px;overflow:hidden;
-    background:#000;display:none;z-index:5;box-shadow:0 6px 16px rgba(0,0,0,.5)}
+    background:#000;z-index:5;box-shadow:0 6px 16px rgba(0,0,0,.5);opacity:0;pointer-events:none}
+  #cam.on{opacity:1}
   #cam video{display:block;width:100%;transform:scaleX(-1)}
   #cam span{position:absolute;top:5px;left:6px;font:13px Arial,sans-serif;letter-spacing:1px;color:#fff;
     background:rgba(122,29,58,.85);padding:1px 7px;border-radius:6px}
@@ -36,8 +39,7 @@
 <div id="cam"><video id="v" autoplay muted playsinline></video><span>● CAMERA</span></div>
 <div id="err"></div>
 <script>
-  // ⬇⬇ PASTE YOUR KIOSK LINK (the one ending in /exec) BETWEEN THE QUOTES ⬇⬇
-  const KIOSK_URL = 'https://script.google.com/macros/s/AKfycbzoVlegyw9ZNhocXVPWqu3xvfn7fx8M8cBteGVkqbvnwwsEkbAnyNesdFTevo_BCXzf/exec';
+    const KIOSK_URL = 'https://script.google.com/macros/s/AKfycbzoVlegyw9ZNhocXVPWqu3xvfn7fx8M8cBteGVkqbvnwwsEkbAnyNesdFTevo_BCXzf/exec';
 
   // Only the kiosk's own Apps Script frames may ask for photos.
   const KIOSK_FRAME = /^https:\/\/[a-z0-9-]+-script\.googleusercontent\.com$/;
@@ -48,7 +50,7 @@
   document.getElementById('app').src = new URLSearchParams(location.search).get('kiosk') || KIOSK_URL;
 
   function show() {
-    document.getElementById('cam').style.display = ready && preview && kiosk ? 'block' : 'none';
+    document.getElementById('cam').classList.toggle('on', !!(ready && preview && kiosk));
     const e = document.getElementById('err');
     e.textContent = error ? '📷 ' + error : '';
     e.style.display = error ? 'block' : 'none';
@@ -61,6 +63,7 @@
     try {
       const stream = await navigator.mediaDevices.getUserMedia({ video: { width: { ideal: 640 }, height: { ideal: 480 } }, audio: false });
       v.srcObject = stream;
+      v.play().catch(() => {});
       ready = true; error = '';
       stream.getVideoTracks()[0].addEventListener('ended', () => {
         ready = false; error = 'Camera unplugged'; show(); tellKiosk(); setTimeout(start, 5000);
@@ -75,12 +78,29 @@
     show(); tellKiosk();
   }
 
-  function snap() {
+  /** Burns a stamp bar into the bottom of the photo: "Fri 11/13/2026 3:54 PM · #104 · Alex Smith" */
+  function stampPhoto(ctx, w, h, label) {
+    const d = new Date();
+    const when = d.toLocaleDateString('en-US', { weekday: 'short', month: 'numeric', day: 'numeric', year: 'numeric' }) +
+      ' ' + d.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit', second: '2-digit' });
+    const text = when + (label ? '  ·  ' + label : '');
+    const bar = Math.round(h * 0.075);
+    ctx.fillStyle = 'rgba(0,0,0,0.65)';
+    ctx.fillRect(0, h - bar, w, bar);
+    ctx.fillStyle = '#ffffff';
+    ctx.font = 'bold ' + Math.round(bar * 0.55) + 'px Arial, sans-serif';
+    ctx.textBaseline = 'middle';
+    ctx.fillText(text, Math.round(bar * 0.3), h - bar / 2, w - bar * 0.6);
+  }
+
+  function snap(label) {
     if (!ready || !v.videoWidth) return '';
-    const w = 480, h = Math.round(w * v.videoHeight / v.videoWidth);
+    const w = 640, h = Math.round(w * v.videoHeight / v.videoWidth);
     const c = document.createElement('canvas'); c.width = w; c.height = h;
-    c.getContext('2d').drawImage(v, 0, 0, w, h);
-    return c.toDataURL('image/jpeg', 0.7);
+    const ctx = c.getContext('2d');
+    ctx.drawImage(v, 0, 0, w, h);
+    stampPhoto(ctx, w, h, String(label || '').slice(0, 60));
+    return c.toDataURL('image/jpeg', 0.75);
   }
 
   window.addEventListener('message', e => {
@@ -90,7 +110,7 @@
       preview = e.data.preview !== false;
       show(); tellKiosk();
     } else if (e.data.type === 'raider-snap') {
-      e.source.postMessage({ type: 'raider-photo', id: e.data.id, photo: snap() }, e.origin);
+      e.source.postMessage({ type: 'raider-photo', id: e.data.id, photo: snap(e.data.label) }, e.origin);
     }
   });
 
